@@ -312,6 +312,27 @@
     .calendar-frame-wrap{height:780px; border-radius:12px;}
   }
 
+
+  /* ---------- trainer hours ---------- */
+  .hrs-controls{display:flex; justify-content:space-between; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:20px;}
+  .pill-group{display:flex; gap:8px; flex-wrap:wrap;}
+  .pill{background:var(--bg-alt); border:1px solid var(--border); color:var(--text-dim); border-radius:20px;
+    padding:7px 16px; font-family:var(--mono); font-size:0.76rem; cursor:pointer; transition:all .15s;}
+  .pill:hover{border-color:var(--gold); color:var(--gold-soft);}
+  .pill.active{background:var(--gold-soft); border-color:var(--gold-soft); color:#0a0f18; font-weight:600;}
+  .hrs-opt{display:flex; align-items:center; gap:8px; font-size:0.78rem; color:var(--text-dim); cursor:pointer;}
+  .hrs-opt input{accent-color:var(--gold);}
+  .hrs-status{font-family:var(--mono); font-size:0.7rem; color:var(--text-faint); margin-top:14px;}
+  .hrs-status.live{color:var(--emerald);}
+  .hrs-warn{margin-top:12px; font-size:0.78rem; color:var(--coral); background:rgba(226,96,79,0.08);
+    border:1px solid rgba(226,96,79,0.3); border-radius:10px; padding:10px 14px;}
+  .chart-card.static{cursor:default;} .chart-card.static:hover{transform:none; border-color:var(--border-soft); box-shadow:none;}
+  #hrsTable tbody td:not(:first-child){text-align:right;} #hrsTable thead th{text-align:right; cursor:default;}
+  #hrsTable thead th:first-child{text-align:left;}
+  #hrsTable tfoot td{padding:11px 12px; font-family:var(--mono); font-weight:600; color:var(--gold-soft); text-align:right; border-top:1px solid var(--border);}
+  #hrsTable tfoot td:first-child{text-align:left; font-family:var(--sans);}
+  #hrsTable td.tot{color:var(--text); font-weight:600;}
+
 </style>
 </head>
 <body>
@@ -328,6 +349,7 @@
       <a href="#department">Department</a>
       <a href="#evaluation">Pre / Post</a>
       <a href="#feedback">Trainer Feedback</a>
+      <a href="#trainer-hours">Trainer Hours</a>
       <a href="#trainer-calendar">Trainer Calendar</a>
     </nav>
   </div>
@@ -545,6 +567,40 @@
     </div>
 
     <div class="trainer-grid" id="trainerGrid"></div>
+  </section>
+
+
+  <!-- ================= TRAINER HOURS ================= -->
+  <section class="block" id="trainer-hours">
+    <div class="block-head">
+      <div>
+        <div class="block-num">06 — Capacity</div>
+        <h2 class="block-title">Trainer Hours</h2>
+        <p class="block-sub">Training hours delivered by Saif, Vipin, Jyoti and Arsh — month by month, or in total. Pulled from the Trainer Hours sheet.</p>
+      </div>
+    </div>
+    <div class="hrs-controls">
+      <div class="pill-group" id="hrsPills"></div>
+    </div>
+    <div class="grid-2 wide-first" style="margin-bottom:22px;">
+      <div class="chart-card static">
+        <div class="cc-head"><div><div class="cc-title" id="hrsMainTitle">Training Hours by Trainer</div>
+          <div class="cc-tag">Trainer Hours sheet · Session Hours tab</div></div>
+          <a class="cc-link" id="hrsOpen" target="_blank" rel="noopener">Open sheet ↗</a></div>
+        <div class="chart-canvas-wrap"><canvas id="hrsMonthChart"></canvas></div>
+      </div>
+      <div class="chart-card static">
+        <div class="cc-head"><div><div class="cc-title" id="hrsPieTitle">Share of Hours</div>
+          <div class="cc-tag" id="hrsPieTag">all months</div></div></div>
+        <div class="chart-canvas-wrap short"><canvas id="hrsPieChart"></canvas></div>
+      </div>
+    </div>
+    <div class="trainer-grid" id="hrsCards"></div>
+    <div class="table-card">
+      <div class="cc-title" style="font-size:0.92rem; margin-bottom:14px;">Hours by Trainer × Month</div>
+      <div class="table-scroll"><table id="hrsTable"><thead></thead><tbody></tbody><tfoot></tfoot></table></div>
+    </div>
+    <div class="hrs-status" id="hrsStatus"></div>
   </section>
 
 <section class="embedded-calendar-section" id="trainer-calendar">
@@ -956,6 +1012,173 @@ document.getElementById('trainerGrid').innerHTML = FEEDBACK
         <div class="trainer-bar-track"><div class="trainer-bar-fill" style="width:${f.overall/5*100}%"></div></div>
         <span>${f.overall}</span></div>
     </div>`).join('');
+
+/* ============================================================ TRAINER HOURS */
+const HRS_SHEET_ID = "1weLRRhVNd0GsKKd-zFKVrucWbn0tfezllzMi90EY4ig";
+const HRS_EDIT_URL = "https://docs.google.com/spreadsheets/d/"+HRS_SHEET_ID+"/edit?usp=sharing";
+/* the tab is named "Session Hours " (with a trailing space) in the sheet, so both spellings are tried */
+let HRS_TAB = "Session Hours";
+const HRS_TAB_NAMES = ["Session Hours ", "Session Hours"];
+const hrsUrl = n => "https://docs.google.com/spreadsheets/d/"+HRS_SHEET_ID+"/gviz/tq?tqx=out:csv&sheet="+encodeURIComponent(n);
+let hrsHasSessions = true, hrsMsg = "Loading from Google Sheet…", hrsErr = false;
+document.getElementById('hrsOpen').setAttribute('href', HRS_EDIT_URL);
+const HRS_TRAINERS = [
+  {key:'Saif',  full:'Mohd. Saif Rafi Ansari', color:GOLD},
+  {key:'Vipin', full:'Vipin Kumar',       color:EMERALD},
+  {key:'Jyoti', full:'Jyoti Verma',       color:BLUE},
+  {key:'Arsh',  full:'Arsh Elahi',        color:'#c37bd6'}
+];
+/* Fallback snapshot (April 2026 rows) used until / unless the live sheet loads. [date, trainer, hours] */
+const HRS_SNAPSHOT = [];
+let hrsRows = HRS_SNAPSHOT.slice(), hrsPeriod = 'total', hrsLive = false, hrsMonthChart, hrsPieChart;
+const mKey = d => d.slice(0,7);
+const mLabel = k => new Date(+k.slice(0,4), +k.slice(5,7)-1, 1).toLocaleString('en',{month:'short', year:'numeric'});
+const fmtH = n => (Math.round(n*100)/100).toLocaleString('en',{maximumFractionDigits:2});
+
+function parseCSV(t){
+  const rows=[]; let r=[], f='', q=false;
+  for(let i=0;i<t.length;i++){ const c=t[i];
+    if(q){ if(c==='"'){ if(t[i+1]==='"'){f+='"';i++;} else q=false; } else f+=c; }
+    else if(c==='"') q=true;
+    else if(c===','){ r.push(f); f=''; }
+    else if(c==='\n'||c==='\r'){ if(c==='\r'&&t[i+1]==='\n') i++; r.push(f); rows.push(r); r=[]; f=''; }
+    else f+=c; }
+  if(f||r.length){ r.push(f); rows.push(r); }
+  return rows;
+}
+function toISO(s){
+  s=(s||'').trim(); let m=s.match(/(\d{4})-(\d{2})-(\d{2})/); if(m) return m[0];
+  const d=new Date(s); return isNaN(d)?null:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function matchTrainer(s){ s=(s||'').toLowerCase(); const t=HRS_TRAINERS.find(t=>s.includes(t.key.toLowerCase())); return t?t.key:null; }
+
+function hrsData(){
+  const rows = hrsRows;
+  const months = [...new Set(rows.map(r=>mKey(r[0])))].sort();
+  const hrs = {}, cnt = {};
+  HRS_TRAINERS.forEach(t=>{ hrs[t.key]={}; cnt[t.key]={}; months.forEach(m=>{hrs[t.key][m]=0; cnt[t.key][m]=0;}); });
+  rows.forEach(r=>{ const m=mKey(r[0]); hrs[r[1]][m]+=r[2]; cnt[r[1]][m]+=(r[3]===undefined?1:r[3]); });
+  return {rows, months, hrs, cnt};
+}
+const periodSum = (obj, months) => months.reduce((s,m)=>s+obj[m],0);
+
+function renderHours(){
+  const {rows, months, hrs, cnt} = hrsData();
+  if(hrsPeriod!=='total' && !months.includes(hrsPeriod)) hrsPeriod='total';
+  const sel = hrsPeriod==='total' ? months : [hrsPeriod];
+  const selLabel = hrsPeriod==='total' ? 'All months' : mLabel(hrsPeriod);
+
+  // pills
+  const pills = document.getElementById('hrsPills');
+  pills.innerHTML = ['total',...months].map(p=>`<button class="pill ${p===hrsPeriod?'active':''}" data-p="${p}">${p==='total'?'Total':mLabel(p)}</button>`).join('');
+  pills.querySelectorAll('.pill').forEach(b=>b.addEventListener('click',()=>{hrsPeriod=b.dataset.p; renderHours();}));
+
+  // main chart: Total = stacked by month per trainer; a month = that month only
+  const isTot = hrsPeriod==='total';
+  const MCOL = ['#e6c877','#7fd1b0','#8fb0f5','#d9a6e6','#f0958a','#9aa7ba'];
+  document.getElementById('hrsMainTitle').textContent = isTot ? 'Total Training Hours by Trainer (stacked by month)' : 'Training Hours by Trainer — ' + mLabel(hrsPeriod);
+  const mData = {labels: HRS_TRAINERS.map(t=>t.key), datasets: isTot
+    ? months.map((m,i)=>({label:mLabel(m), data:HRS_TRAINERS.map(t=>+hrs[t.key][m].toFixed(2)), backgroundColor:MCOL[i%MCOL.length], borderRadius:3, maxBarThickness:70, stack:'s'}))
+    : [{label:mLabel(hrsPeriod), data:HRS_TRAINERS.map(t=>+hrs[t.key][hrsPeriod].toFixed(2)), backgroundColor:HRS_TRAINERS.map(t=>t.color), borderRadius:5, maxBarThickness:70}]};
+  if(hrsMonthChart) hrsMonthChart.destroy();
+  hrsMonthChart = new Chart(document.getElementById('hrsMonthChart'),{type:'bar', data:mData, options:{
+    responsive:true, maintainAspectRatio:false, interaction:{mode:'index', intersect:false},
+    plugins:{legend:{display:isTot, position:'top', align:'end', labels:{boxWidth:10, boxHeight:10, font:{size:11}}},
+      tooltip:{backgroundColor:'#0d1522', borderColor:'#22334a', borderWidth:1, padding:10,
+        callbacks:{label:c=>` ${c.dataset.label}: ${fmtH(c.parsed.y)} h`,
+          footer:items=>isTot?'Total: '+fmtH(items.reduce((a,i)=>a+i.parsed.y,0))+' h':''}}},
+    scales:{x:{stacked:isTot, grid:{display:false}, ticks:{font:{size:12}}},
+      y:{stacked:isTot, beginAtZero:true, grid:baseGrid(), title:{display:true, text:'Hours', color:'#5f6d82', font:{size:10}}, ticks:{font:{family:"'IBM Plex Mono', monospace", size:10}}}}}});
+
+  // doughnut for selected period
+  const tot = HRS_TRAINERS.map(t=>periodSum(hrs[t.key], sel));
+  const grand = tot.reduce((a,b)=>a+b,0);
+  document.getElementById('hrsPieTitle').textContent = 'Share of Hours — ' + selLabel;
+  document.getElementById('hrsPieTag').textContent = fmtH(grand) + ' hours total';
+  const pData = {labels:HRS_TRAINERS.map(t=>t.key), datasets:[{data:tot.map(v=>+v.toFixed(2)), backgroundColor:HRS_TRAINERS.map(t=>t.color), borderColor:'#111b2b', borderWidth:3}]};
+  if(hrsPieChart){ hrsPieChart.data=pData; hrsPieChart.update(); }
+  else hrsPieChart = new Chart(document.getElementById('hrsPieChart'),{type:'doughnut', data:pData, options:{
+    responsive:true, maintainAspectRatio:false, cutout:'58%',
+    plugins:{legend:{position:'bottom', labels:{boxWidth:10, boxHeight:10, font:{size:10.5}}},
+      tooltip:{backgroundColor:'#0d1522', borderColor:'#22334a', borderWidth:1, padding:10, callbacks:{label:c=>{
+        const g=c.dataset.data.reduce((a,b)=>a+b,0); return ` ${c.label}: ${fmtH(c.parsed)} h (${g?(c.parsed/g*100).toFixed(1):0}%)`;}}}}}});
+
+  // trainer cards (selected period)
+  document.getElementById('hrsCards').innerHTML = HRS_TRAINERS.map((t,i)=>{
+    const h=tot[i], n=periodSum(cnt[t.key], sel), share=grand?h/grand*100:0;
+    return `<div class="trainer-card">
+      <div class="trainer-name">${t.full}</div>
+      <div class="trainer-role">${selLabel}${hrsHasSessions?' · '+n+' sessions':''}</div>
+      <div class="trainer-score" style="color:${t.color}">${fmtH(h)} <small>hrs</small></div>
+      <div class="trainer-bar-row"><span style="width:86px;">Share of hours</span>
+        <div class="trainer-bar-track"><div class="trainer-bar-fill" style="width:${share}%; background:${t.color}"></div></div><span>${share.toFixed(0)}%</span></div>
+      ${hrsHasSessions?`<div class="trainer-responses">Avg ${n?fmtH(h/n):'0'} h per session</div>`:''}</div>`;}).join('');
+
+  // table
+  document.querySelector('#hrsTable thead').innerHTML = '<tr><th>Trainer</th>'+months.map(m=>`<th>${mLabel(m)}</th>`).join('')+'<th>Total hrs</th>'+(hrsHasSessions?'<th>Sessions</th>':'')+'</tr>';
+  document.querySelector('#hrsTable tbody').innerHTML = HRS_TRAINERS.map(t=>
+    `<tr><td>${t.full}</td>${months.map(m=>`<td>${fmtH(hrs[t.key][m])}</td>`).join('')}<td class="tot">${fmtH(periodSum(hrs[t.key],months))}</td>${hrsHasSessions?`<td>${periodSum(cnt[t.key],months)}</td>`:''}</tr>`).join('');
+  const colTot = months.map(m=>HRS_TRAINERS.reduce((s,t)=>s+hrs[t.key][m],0));
+  document.querySelector('#hrsTable tfoot').innerHTML = `<tr><td>All four trainers</td>${colTot.map(v=>`<td>${fmtH(v)}</td>`).join('')}<td>${fmtH(colTot.reduce((a,b)=>a+b,0))}</td>${hrsHasSessions?`<td>${rows.length}</td>`:''}</tr>`;
+
+  const st = document.getElementById('hrsStatus');
+  st.className = 'hrs-status' + (hrsLive?' live':'');
+  st.style.color = hrsErr ? 'var(--coral)' : '';
+  st.textContent = hrsLive ? `● Live from Google Sheet · "${HRS_TAB}" tab · ${hrsRows.length} rows for these 4 trainers` : hrsMsg;
+}
+
+function num(v){ v=String(v==null?'':v).replace(/,/g,'').trim(); const t=v.match(/^(\d+):(\d{2})/); return t? +t[1] + +t[2]/60 : parseFloat(v); }
+const MON=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+function monthKeyFrom(v){
+  v=String(v||'').trim(); if(!v) return null;
+  let m=v.match(/(\d{4})-(\d{1,2})/); if(m) return m[1]+'-'+m[2].padStart(2,'0');
+  m=v.match(/(\d{1,2})[\/.](\d{1,2})[\/.](\d{4})/); if(m) return m[3]+'-'+m[2].padStart(2,'0');
+  const i=MON.findIndex(x=>v.toLowerCase().includes(x)); if(i<0) return null;
+  const y=(v.match(/(20\d{2})/)||v.match(/[-' ](\d{2})\b/)||[])[1];
+  return (y?(y.length===2?2000+ +y:+y):2026)+'-'+String(i+1).padStart(2,'0');
+}
+function readSessionHours(grid){
+  const head0 = (grid[0]||[]).map(h=>h.trim().toLowerCase());
+  if(head0.includes('creator') && head0.includes('access group')) throw new Error('tab "'+HRS_TAB+'" was not found, so Google returned the events tab instead');
+  for(let hi=0; hi<Math.min(grid.length,15); hi++){
+    const hd=grid[hi].map(c=>(c||'').trim()), low=hd.map(c=>c.toLowerCase()), out=[];
+    const iT=low.findIndex(c=>c.includes('trainer')&&!matchTrainer(c)), iH=low.findIndex(c=>c.includes('hour'));
+    let iM=low.findIndex(c=>c.includes('month')); if(iM<0) iM=low.findIndex(c=>/date/.test(c));
+    if(iT>=0&&iH>=0&&iM>=0){                      // long: one row per session / trainer-month
+      grid.slice(hi+1).forEach(r=>{ const tr=matchTrainer(r[iT]), mk=monthKeyFrom(r[iM]), h=num(r[iH]);
+        if(tr&&mk&&!isNaN(h)) out.push([mk+'-01',tr,h,low[iM].includes('date')?1:0]); });
+      hrsHasSessions=low[iM].includes('date'); if(out.length) return out;
+    }
+    const mCols=hd.map((c,j)=>j>0&&monthKeyFrom(c)?j:-1).filter(j=>j>0);
+    if(mCols.length){                              // wide: trainers down, months across
+      grid.slice(hi+1).forEach(r=>{ const tr=matchTrainer(r[0]); if(!tr) return;
+        mCols.forEach(j=>{ const h=num(r[j]); if(!isNaN(h)) out.push([monthKeyFrom(hd[j])+'-01',tr,h,0]); }); });
+      hrsHasSessions=false; if(out.length) return out;
+    }
+    const tCols=hd.map((c,j)=>matchTrainer(c)?j:-1).filter(j=>j>=0);
+    if(tCols.length>=2){                           // wide: months down, trainers across
+      grid.slice(hi+1).forEach(r=>{ const mk=monthKeyFrom(r[0]); if(!mk) return;
+        tCols.forEach(j=>{ const h=num(r[j]); if(!isNaN(h)) out.push([mk+'-01',matchTrainer(hd[j]),h,0]); }); });
+      hrsHasSessions=false; if(out.length) return out;
+    }
+  }
+  throw new Error('could not recognise the layout. First row read: '+(grid[0]||[]).slice(0,8).join(' | '));
+}
+async function loadHours(){
+  const errs=[];
+  for(const name of HRS_TAB_NAMES){
+    try{
+      const res = await fetch(hrsUrl(name)); if(!res.ok) throw new Error('HTTP '+res.status+' — is the sheet shared as “Anyone with the link can view”?');
+      hrsRows = readSessionHours(parseCSV(await res.text())); hrsLive = true; hrsErr = false; HRS_TAB = name.trim(); break;
+    }catch(e){ errs.push(e.message); }
+  }
+  if(!hrsLive){ console.warn('Trainer hours load failed', errs); hrsRows=[]; hrsErr=true;
+    hrsMsg = '⚠ Could not load the “Session Hours” tab: '+errs[errs.length-1]; }
+  renderHours();
+}
+renderHours();
+loadHours();
+
 </script>
 </body>
 </html>
